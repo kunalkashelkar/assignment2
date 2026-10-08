@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma";
 import { requireRole } from "@/lib/authorization";
 import { CreateTransactionSchema, CreateTransactionInput } from "@/lib/validations/transaction";
 import { RoleType, TransactionStatus, AuditEventType } from "@prisma/client";
+import { sendTransactionNotification } from "@/lib/email";
 import { revalidatePath } from "next/cache";
 
 export async function createTransactionAction(input: CreateTransactionInput) {
@@ -20,9 +21,12 @@ export async function createTransactionAction(input: CreateTransactionInput) {
     }
 
     const userId = session.user.id;
+    const userEmail = session.user.email;
+    const userName = session.user.name || "Customer";
     const organizationId = membership.organizationId;
     const reference = `TX-ACT-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
+    // Step 1: Atomic database mutation
     const [transaction] = await prisma.$transaction([
       prisma.transaction.create({
         data: {
@@ -48,6 +52,21 @@ export async function createTransactionAction(input: CreateTransactionInput) {
         },
       }),
     ]);
+
+    // Step 2: Trigger transactional email dispatch
+    try {
+      await sendTransactionNotification({
+        to: userEmail,
+        userName,
+        reference: transaction.reference,
+        amount: Number(transaction.amount),
+        currency: transaction.currency,
+        organizationName: membership.organization.name,
+        userId,
+      });
+    } catch (emailErr) {
+      console.warn("Server action email warning:", emailErr);
+    }
 
     revalidatePath("/dashboard");
     return {

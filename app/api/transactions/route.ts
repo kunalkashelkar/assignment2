@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import { requireSession, requireRole, AuthorizationError } from "@/lib/authorization";
 import { CreateTransactionSchema } from "@/lib/validations/transaction";
 import { RoleType, TransactionStatus, AuditEventType } from "@prisma/client";
+import { sendTransactionNotification } from "@/lib/email";
 
 export async function GET(request: NextRequest) {
   try {
@@ -71,9 +72,11 @@ export async function POST(request: NextRequest) {
     // Tenant and User IDs derived STRICTLY from server session/membership
     const orgId = membership.organizationId;
     const userId = session.user.id;
+    const userEmail = session.user.email;
+    const userName = session.user.name || "Customer";
     const reference = `TX-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
-    // Atomic transaction creation & audit log
+    // Step 1: Execute database mutation atomically
     const [transaction] = await prisma.$transaction([
       prisma.transaction.create({
         data: {
@@ -99,6 +102,23 @@ export async function POST(request: NextRequest) {
         },
       }),
     ]);
+
+    // Step 2: Trigger transactional email notification workflow
+    // If DB transaction failed above, execution never reaches here.
+    try {
+      await sendTransactionNotification({
+        to: userEmail,
+        userName,
+        reference: transaction.reference,
+        amount: Number(transaction.amount),
+        currency: transaction.currency,
+        organizationName: membership.organization.name,
+        userId,
+      });
+    } catch (emailErr) {
+      // Non-blocking log so transaction is not undone after being committed
+      console.warn("Transactional email dispatch encountered a non-fatal warning:", emailErr);
+    }
 
     return NextResponse.json(
       {
