@@ -51,9 +51,11 @@ async function main() {
   const orgIds: string[] = [];
   for (let i = 0; i < NUM_ORGS; i++) {
     const companyName = faker.company.name();
-    const slug = `${faker.helpers.slugify(companyName).toLowerCase()}-${faker.string.alphanumeric(4).toLowerCase()}`;
-    const org = await prisma.organization.create({
-      data: {
+    const slug = `org-${i + 1}-${faker.helpers.slugify(companyName).toLowerCase().substring(0, 20)}`;
+    const org = await prisma.organization.upsert({
+      where: { slug },
+      update: { name: companyName },
+      create: {
         name: companyName,
         slug,
         description: faker.company.catchPhrase(),
@@ -67,7 +69,7 @@ async function main() {
   const userIds: string[] = [];
   const createdEmails = new Set<string>();
 
-  // Ensure deterministic test accounts
+  // Fixed deterministic accounts
   const fixedUsers = [
     { name: "Super Admin", email: "admin@assignment2.local", role: RoleType.ADMIN },
     { name: "Team Member", email: "member@assignment2.local", role: RoleType.MEMBER },
@@ -106,14 +108,16 @@ async function main() {
 
   // Seed remaining dynamic users
   for (let i = fixedUsers.length; i < NUM_USERS; i++) {
-    let email = faker.internet.email().toLowerCase();
+    let email = `user.${i + 1}.${faker.internet.email().toLowerCase()}`;
     while (createdEmails.has(email)) {
-      email = faker.internet.email().toLowerCase();
+      email = `user.${i + 1}.${faker.string.alphanumeric(4)}.${faker.internet.email().toLowerCase()}`;
     }
     createdEmails.add(email);
 
-    const user = await prisma.user.create({
-      data: {
+    const user = await prisma.user.upsert({
+      where: { email },
+      update: {},
+      create: {
         name: faker.person.fullName(),
         email,
         emailVerified: faker.datatype.boolean(0.8),
@@ -122,11 +126,18 @@ async function main() {
     });
     userIds.push(user.id);
 
-    // Assign to 1-2 random organizations with random roles
+    // Assign to an organization
     const assignedOrg = faker.helpers.arrayElement(orgIds);
     const assignedRole = faker.helpers.arrayElement([RoleType.MEMBER, RoleType.GUEST]);
-    await prisma.membership.create({
-      data: {
+    await prisma.membership.upsert({
+      where: {
+        userId_organizationId: {
+          userId: user.id,
+          organizationId: assignedOrg,
+        },
+      },
+      update: { roleId: roleMap[assignedRole] },
+      create: {
         userId: user.id,
         organizationId: assignedOrg,
         roleId: roleMap[assignedRole],
@@ -134,11 +145,12 @@ async function main() {
     });
   }
 
-  // 4. Seed Transactions (belonging to User and Organization)
+  // 4. Seed Transactions
   console.log(`-> Seeding ${NUM_TRANSACTIONS} Transactions...`);
   for (let i = 0; i < NUM_TRANSACTIONS; i++) {
     const orgId = faker.helpers.arrayElement(orgIds);
     const userId = faker.helpers.arrayElement(userIds);
+    const reference = `TX-${String(i + 1).padStart(5, "0")}-${faker.string.alphanumeric(6).toUpperCase()}`;
     const statuses = [
       TransactionStatus.PENDING,
       TransactionStatus.COMPLETED,
@@ -146,15 +158,17 @@ async function main() {
       TransactionStatus.REFUNDED,
     ];
 
-    await prisma.transaction.create({
-      data: {
+    await prisma.transaction.upsert({
+      where: { reference },
+      update: {},
+      create: {
         organizationId: orgId,
         userId: userId,
         amount: parseFloat(faker.finance.amount({ min: 10, max: 2500, dec: 2 })),
         currency: "USD",
         status: faker.helpers.arrayElement(statuses),
         description: faker.finance.transactionDescription(),
-        reference: `TX-${faker.string.alphanumeric(10).toUpperCase()}`,
+        reference,
         metadata: {
           gateway: faker.helpers.arrayElement(["stripe", "resend_checkout", "bank_transfer"]),
           ip: faker.internet.ipv4(),
@@ -209,13 +223,16 @@ async function main() {
   for (let i = 0; i < NUM_EMAIL_EVENTS; i++) {
     const userId = faker.helpers.maybe(() => faker.helpers.arrayElement(userIds), { probability: 0.7 });
     const emailId = `msg_${faker.string.alphanumeric(16)}`;
+    const providerEventId = `evt_seed_${i + 1}_${faker.string.alphanumeric(10)}`;
     const eventType = faker.helpers.arrayElement(emailStatuses);
 
-    await prisma.emailEvent.create({
-      data: {
+    await prisma.emailEvent.upsert({
+      where: { providerEventId },
+      update: {},
+      create: {
         userId: userId || null,
         emailId,
-        providerEventId: `evt_${faker.string.alphanumeric(20)}`,
+        providerEventId,
         eventType,
         recipient: faker.internet.email().toLowerCase(),
         subject: faker.helpers.arrayElement([
