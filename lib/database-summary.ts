@@ -1,6 +1,19 @@
 import prisma from "@/lib/prisma";
+import { z } from "zod";
 
-export async function getDatabaseSummary() {
+export const DatabaseSummaryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(5),
+});
+
+export type DatabaseSummaryQuery = z.infer<typeof DatabaseSummaryQuerySchema>;
+
+/**
+ * Reusable, efficient Prisma queries for database verification and statistics.
+ * Aggregations and counts run concurrently with no sensitive data exposed.
+ */
+export async function getDatabaseSummary(options?: { limit?: number }) {
+  const limit = options?.limit ?? 5;
+
   const [
     userCount,
     organizationCount,
@@ -12,22 +25,23 @@ export async function getDatabaseSummary() {
     recentTransactions,
     recentAuditLogs,
   ] = await Promise.all([
+    // Relational entity counts
     prisma.user.count(),
     prisma.organization.count(),
     prisma.membership.count(),
     prisma.transaction.count(),
     prisma.auditLog.count(),
     prisma.emailEvent.count(),
+
+    // Financial volume aggregations
     prisma.transaction.aggregate({
-      _sum: {
-        amount: true,
-      },
-      _avg: {
-        amount: true,
-      },
+      _sum: { amount: true },
+      _avg: { amount: true },
     }),
+
+    // Filtered transaction projection (sensitive metadata omitted)
     prisma.transaction.findMany({
-      take: 5,
+      take: limit,
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
@@ -44,8 +58,10 @@ export async function getDatabaseSummary() {
         },
       },
     }),
+
+    // Recent audit logs
     prisma.auditLog.findMany({
-      take: 5,
+      take: limit,
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
